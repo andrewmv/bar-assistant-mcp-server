@@ -25,6 +25,9 @@ import {
   TasteRecommendationsParams,
   FilterCocktailsParams,
   BarAssistantConfig,
+  CreateCocktailParams,
+  CreateIngredientParams,
+  AddBarIngredientParams,
 } from './types.js';
 import * as ResponseSchemas from './response-schemas.js';
 import * as OutputSchemas from './output-schemas.js';
@@ -1076,33 +1079,6 @@ Structured output with complete recipe data:
                   maximum: 20,
                 },
               },
-              // Schema validation rules for LLMs
-              oneOf: [
-                {
-                  description: 'Single recipe by name',
-                  required: ['cocktail_name']
-                },
-                {
-                  description: 'Single recipe by ID', 
-                  required: ['cocktail_id']
-                },
-                {
-                  description: 'Batch processing by names',
-                  required: ['cocktail_names']
-                },
-                {
-                  description: 'Batch processing by IDs',
-                  required: ['cocktail_ids']
-                },
-                {
-                  description: 'Mixed batch processing',
-                  anyOf: [
-                    { required: ['cocktail_names', 'cocktail_ids'] },
-                    { required: ['cocktail_names', 'cocktail_id'] },
-                    { required: ['cocktail_name', 'cocktail_ids'] }
-                  ]
-                }
-              ],
             },
             outputSchema: OutputSchemas.recipeOutputSchema,
           },
@@ -1142,6 +1118,255 @@ Returns detailed ingredient information including:
             outputSchema: OutputSchemas.ingredientInfoOutputSchema,
           },
 
+          {
+            name: 'manage_bar_inventory',
+            description: `Manage what ingredients are stocked in your bar.
+
+**Actions:**
+- list: Show all ingredients currently in your bar inventory (with bar_ingredient_id needed for updates/removes)
+- add: Add an ingredient to your bar by name or ID, with optional amount/price/note
+- remove: Remove an ingredient from your bar by its bar_ingredient_id (use list to find IDs)
+- update: Update the amount, units, price, or note of a stocked ingredient
+
+**Examples:**
+- List inventory: {action: "list"}
+- Add by name: {action: "add", ingredient_name: "Campari", amount: 700, units: "ml", price: 22.99}
+- Add by ID: {action: "add", ingredient_id: 42, amount: 750, units: "ml"}
+- Remove: {action: "remove", bar_ingredient_id: 15}
+- Update amount: {action: "update", bar_ingredient_id: 15, amount: 500, units: "ml"}`,
+            inputSchema: {
+              type: 'object',
+              properties: {
+                action: {
+                  type: 'string',
+                  enum: ['list', 'add', 'remove', 'update'],
+                  description: 'Operation to perform on the bar inventory',
+                },
+                ingredient_name: {
+                  type: 'string',
+                  description: 'Ingredient name to look up and add (used with action: add)',
+                },
+                ingredient_id: {
+                  type: 'number',
+                  description: 'Catalog ingredient ID to add (used with action: add)',
+                },
+                bar_ingredient_id: {
+                  type: 'number',
+                  description: 'Bar inventory entry ID (used with action: remove or update; get this from action: list)',
+                },
+                amount: {
+                  type: 'number',
+                  description: 'Quantity on hand (e.g. 700)',
+                },
+                units: {
+                  type: 'string',
+                  description: 'Units for amount (e.g. "ml", "oz", "bottle")',
+                },
+                price: {
+                  type: 'number',
+                  description: 'Purchase price',
+                },
+                note: {
+                  type: 'string',
+                  description: 'Optional note (e.g. brand, location)',
+                },
+              },
+              required: ['action'],
+            },
+          },
+
+          {
+            name: 'manage_shopping_list',
+            description: `Manage your persistent Bar Assistant shopping list.
+
+**Actions:**
+- get: Retrieve all items currently on the shopping list (returns ingredient IDs useful for remove)
+- add: Add ingredients by name or ID to the shopping list
+- remove: Remove specific ingredients from the shopping list by their ingredient catalog IDs
+- clear: Remove all items from the shopping list
+
+**Examples:**
+- View list: {action: "get"}
+- Add by name: {action: "add", ingredient_names: ["Aperol", "Prosecco", "Club Soda"]}
+- Add by ID: {action: "add", ingredient_ids: [12, 34]}
+- Remove items: {action: "remove", ingredient_ids: [12, 34]}
+- Clear everything: {action: "clear"}`,
+            inputSchema: {
+              type: 'object',
+              properties: {
+                action: {
+                  type: 'string',
+                  enum: ['get', 'add', 'remove', 'clear'],
+                  description: 'Operation to perform on the shopping list',
+                },
+                ingredient_names: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: 'Ingredient names to add (used with action: add; names are resolved to IDs automatically)',
+                },
+                ingredient_ids: {
+                  type: 'array',
+                  items: { type: 'number' },
+                  description: 'Catalog ingredient IDs to add or remove',
+                },
+              },
+              required: ['action'],
+            },
+          },
+
+          {
+            name: 'manage_cocktail',
+            description: `Create, update, or delete cocktail recipes in your Bar Assistant database.
+
+**Actions:**
+- create: Add a new cocktail recipe. Ingredient names are resolved to catalog IDs automatically.
+- update: Modify an existing cocktail by ID. Only supply fields you want to change.
+- delete: Permanently remove a cocktail recipe by ID.
+
+**Ingredient format:** Each ingredient needs name (or ingredient_id), amount, and units.
+**Instruction format:** Pass an array of instruction strings in order — sort numbers are assigned automatically.
+**Glass/method:** Pass names (e.g. "coupe", "shake") — they are matched to catalog entries automatically.
+
+**Examples:**
+- Create: {action: "create", name: "House Negroni", ingredients: [{name: "Gin", amount: 30, units: "ml"}, ...], instructions: ["Stir all ingredients with ice", "Strain into rocks glass"]}
+- Update name/description: {action: "update", cocktail_id: 42, name: "House Negroni Spec", description: "Our signature variation"}
+- Delete: {action: "delete", cocktail_id: 42}`,
+            inputSchema: {
+              type: 'object',
+              properties: {
+                action: {
+                  type: 'string',
+                  enum: ['create', 'update', 'delete'],
+                  description: 'Operation to perform',
+                },
+                cocktail_id: {
+                  type: 'number',
+                  description: 'ID of the cocktail to update or delete',
+                },
+                name: {
+                  type: 'string',
+                  description: 'Cocktail name (required for create)',
+                },
+                description: {
+                  type: 'string',
+                  description: 'Short description or tasting notes',
+                },
+                instructions: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: 'Preparation steps in order (e.g. ["Add gin to shaker", "Shake with ice", "Strain into glass"])',
+                },
+                garnish: {
+                  type: 'string',
+                  description: 'Garnish description (e.g. "Orange twist")',
+                },
+                source: {
+                  type: 'string',
+                  description: 'Recipe source or attribution',
+                },
+                abv: {
+                  type: 'number',
+                  description: 'Estimated ABV percentage',
+                },
+                glass: {
+                  type: 'string',
+                  description: 'Glass type name (e.g. "coupe", "rocks", "martini") — matched to catalog automatically',
+                },
+                method: {
+                  type: 'string',
+                  description: 'Preparation method (e.g. "shake", "stir", "build") — matched to catalog automatically',
+                },
+                tags: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: 'Tags to apply (e.g. ["classic", "stirred", "boozy"])',
+                },
+                ingredients: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      name: { type: 'string', description: 'Ingredient name (resolved to catalog ID automatically)' },
+                      ingredient_id: { type: 'number', description: 'Catalog ingredient ID (use instead of name if known)' },
+                      amount: { type: 'number', description: 'Quantity (in the specified units)' },
+                      units: { type: 'string', description: 'Units of measurement (e.g. "ml", "oz", "dash", "drop")' },
+                      optional: { type: 'boolean', description: 'Whether this ingredient is optional' },
+                      note: { type: 'string', description: 'Ingredient-specific note (e.g. "chilled", "expressed")' },
+                    },
+                  },
+                  description: 'Ingredient list for the recipe',
+                },
+              },
+              required: ['action'],
+            },
+          },
+
+          {
+            name: 'manage_ingredient_catalog',
+            description: `Search, create, update, or delete ingredients in the global Bar Assistant ingredient catalog.
+Use this to find ingredient IDs for other tools, or to add new custom ingredients.
+
+**Actions:**
+- search: Find ingredients by name — returns IDs, names, and categories
+- create: Add a new ingredient to the catalog (e.g. a house-made syrup or local spirit)
+- update: Modify an existing catalog ingredient by ID
+- delete: Remove an ingredient from the catalog by ID (use with caution — also removes it from recipes)
+
+**Examples:**
+- Search: {action: "search", query: "campari"}
+- Create: {action: "create", name: "House Oleo Saccharum", description: "Citrus oil-sugar syrup", category: "Syrups"}
+- Update: {action: "update", ingredient_id: 99, description: "Updated description", strength: 0}
+- Delete: {action: "delete", ingredient_id: 99}`,
+            inputSchema: {
+              type: 'object',
+              properties: {
+                action: {
+                  type: 'string',
+                  enum: ['search', 'create', 'update', 'delete'],
+                  description: 'Operation to perform on the ingredient catalog',
+                },
+                query: {
+                  type: 'string',
+                  description: 'Search term (used with action: search)',
+                },
+                limit: {
+                  type: 'number',
+                  description: 'Max results to return for search (default 20)',
+                  default: 20,
+                },
+                ingredient_id: {
+                  type: 'number',
+                  description: 'Catalog ingredient ID (used with action: update or delete)',
+                },
+                name: {
+                  type: 'string',
+                  description: 'Ingredient name (required for create)',
+                },
+                strength: {
+                  type: 'number',
+                  description: 'ABV percentage (e.g. 40 for 40% ABV spirits; 0 for non-alcoholic)',
+                },
+                description: {
+                  type: 'string',
+                  description: 'Ingredient description or tasting notes',
+                },
+                origin: {
+                  type: 'string',
+                  description: 'Country or region of origin',
+                },
+                color: {
+                  type: 'string',
+                  description: 'Hex color code for the ingredient (e.g. "#FF5733")',
+                },
+                category: {
+                  type: 'string',
+                  description: 'Category name (e.g. "Spirits", "Liqueurs", "Syrups", "Juices") — matched to catalog automatically',
+                },
+              },
+              required: ['action'],
+            },
+          },
+
         ],
       };
     });
@@ -1160,7 +1385,19 @@ Returns detailed ingredient information including:
           
           case 'get_ingredient_info':
             return await this.handleGetIngredientInfo(args as any as { ingredient_name: string });
-          
+
+          case 'manage_bar_inventory':
+            return await this.handleManageBarInventory(args as any);
+
+          case 'manage_shopping_list':
+            return await this.handleManageShoppingList(args as any);
+
+          case 'manage_cocktail':
+            return await this.handleManageCocktail(args as any);
+
+          case 'manage_ingredient_catalog':
+            return await this.handleManageIngredientCatalog(args as any);
+
           default:
             throw new McpError(
               ErrorCode.MethodNotFound,
@@ -2051,6 +2288,250 @@ Returns detailed ingredient information including:
           },
         ],
       };
+    }
+  }
+
+  private async handleManageBarInventory(args: {
+    action: 'list' | 'add' | 'remove' | 'update';
+    ingredient_name?: string;
+    ingredient_id?: number;
+    bar_ingredient_id?: number;
+    amount?: number;
+    units?: string;
+    price?: number;
+    note?: string;
+  }) {
+    switch (args.action) {
+      case 'list': {
+        const barId = this.barClient['config'].barId || '1';
+        const response = await this.barClient['client'].get(`/api/bars/${barId}/ingredients?include=ingredient`);
+        const items: any[] = response.data.data || [];
+        if (items.length === 0) {
+          return { content: [{ type: 'text', text: '# Bar Inventory\n\nYour bar inventory is empty.' }] };
+        }
+        const lines = items.map(item => {
+          const name = item.ingredient?.name || `Ingredient #${item.ingredient_id}`;
+          const amount = item.amount ? ` — ${this.formatVolume(item.amount, item.units || 'ml')}` : '';
+          const price = item.price ? ` ($${item.price})` : '';
+          const note = item.note ? ` [${item.note}]` : '';
+          return `• **${name}**${amount}${price}${note}  *(bar_ingredient_id: ${item.id})*`;
+        });
+        return { content: [{ type: 'text', text: `# Bar Inventory (${items.length} items)\n\n${lines.join('\n')}` }] };
+      }
+
+      case 'add': {
+        if (!args.ingredient_id && !args.ingredient_name) {
+          throw new McpError(ErrorCode.InvalidParams, 'ingredient_id or ingredient_name is required for action: add');
+        }
+        const result = await this.barClient.addBarIngredient({
+          ingredient_id: args.ingredient_id,
+          ingredient_name: args.ingredient_name,
+          amount: args.amount,
+          units: args.units,
+          price: args.price,
+          note: args.note,
+        });
+        const name = (result as any).ingredient?.name || args.ingredient_name || `Ingredient #${result.ingredient_id}`;
+        return { content: [{ type: 'text', text: `Added **${name}** to your bar inventory (bar_ingredient_id: ${result.id}).` }] };
+      }
+
+      case 'remove': {
+        if (!args.bar_ingredient_id) {
+          throw new McpError(ErrorCode.InvalidParams, 'bar_ingredient_id is required for action: remove (use action: list to find it)');
+        }
+        await this.barClient.removeBarIngredient(args.bar_ingredient_id);
+        return { content: [{ type: 'text', text: `Removed bar ingredient #${args.bar_ingredient_id} from your inventory.` }] };
+      }
+
+      case 'update': {
+        if (!args.bar_ingredient_id) {
+          throw new McpError(ErrorCode.InvalidParams, 'bar_ingredient_id is required for action: update (use action: list to find it)');
+        }
+        const result = await this.barClient.updateBarIngredient(args.bar_ingredient_id, {
+          amount: args.amount,
+          units: args.units,
+          price: args.price,
+          note: args.note,
+        });
+        const name = (result as any).ingredient?.name || `Ingredient #${result.ingredient_id}`;
+        return { content: [{ type: 'text', text: `Updated **${name}** (bar_ingredient_id: ${result.id}).` }] };
+      }
+
+      default:
+        throw new McpError(ErrorCode.InvalidParams, `Unknown action: ${(args as any).action}`);
+    }
+  }
+
+  private async handleManageShoppingList(args: {
+    action: 'get' | 'add' | 'remove' | 'clear';
+    ingredient_names?: string[];
+    ingredient_ids?: number[];
+  }) {
+    switch (args.action) {
+      case 'get': {
+        const items = await this.barClient.getShoppingList();
+        if (items.length === 0) {
+          return { content: [{ type: 'text', text: '# Shopping List\n\nYour shopping list is empty.' }] };
+        }
+        const lines = items.map(item => {
+          const name = item.ingredient?.name || `Ingredient #${item.ingredient_id}`;
+          return `• **${name}** *(ingredient_id: ${item.ingredient_id})*`;
+        });
+        return { content: [{ type: 'text', text: `# Shopping List (${items.length} items)\n\n${lines.join('\n')}` }] };
+      }
+
+      case 'add': {
+        let ids: number[] = [...(args.ingredient_ids || [])];
+        if (args.ingredient_names && args.ingredient_names.length > 0) {
+          const resolved = await Promise.all(args.ingredient_names.map(async name => {
+            const id = await this.barClient.resolveIngredientId(name);
+            if (!id) throw new McpError(ErrorCode.InvalidParams, `Ingredient not found in catalog: "${name}". Use manage_ingredient_catalog to find or create it.`);
+            return id;
+          }));
+          ids = [...ids, ...resolved];
+        }
+        if (ids.length === 0) {
+          throw new McpError(ErrorCode.InvalidParams, 'ingredient_names or ingredient_ids is required for action: add');
+        }
+        await this.barClient.addToShoppingList(ids);
+        return { content: [{ type: 'text', text: `Added ${ids.length} item(s) to your shopping list.` }] };
+      }
+
+      case 'remove': {
+        if (!args.ingredient_ids || args.ingredient_ids.length === 0) {
+          throw new McpError(ErrorCode.InvalidParams, 'ingredient_ids is required for action: remove (use action: get to find them)');
+        }
+        await this.barClient.removeFromShoppingList(args.ingredient_ids);
+        return { content: [{ type: 'text', text: `Removed ${args.ingredient_ids.length} item(s) from your shopping list.` }] };
+      }
+
+      case 'clear': {
+        const items = await this.barClient.getShoppingList();
+        if (items.length === 0) {
+          return { content: [{ type: 'text', text: 'Shopping list is already empty.' }] };
+        }
+        const ids = items.map(i => i.ingredient_id);
+        await this.barClient.removeFromShoppingList(ids);
+        return { content: [{ type: 'text', text: `Cleared ${ids.length} item(s) from your shopping list.` }] };
+      }
+
+      default:
+        throw new McpError(ErrorCode.InvalidParams, `Unknown action: ${(args as any).action}`);
+    }
+  }
+
+  private async handleManageCocktail(args: {
+    action: 'create' | 'update' | 'delete';
+    cocktail_id?: number;
+    name?: string;
+    description?: string;
+    instructions?: string[];
+    garnish?: string;
+    source?: string;
+    abv?: number;
+    glass?: string;
+    method?: string;
+    tags?: string[];
+    ingredients?: Array<{
+      name?: string;
+      ingredient_id?: number;
+      amount?: number;
+      units?: string;
+      optional?: boolean;
+      note?: string;
+    }>;
+  }) {
+    switch (args.action) {
+      case 'create': {
+        if (!args.name) {
+          throw new McpError(ErrorCode.InvalidParams, 'name is required for action: create');
+        }
+        const result = await this.barClient.createCocktail(args as CreateCocktailParams);
+        const link = result.slug ? this.getCocktailDirectLink(result.slug) : '';
+        let text = `Created cocktail **${result.name}** (ID: ${result.id}).`;
+        if (link) text += `\n\n[View Recipe](${link})`;
+        return { content: [{ type: 'text', text }] };
+      }
+
+      case 'update': {
+        if (!args.cocktail_id) {
+          throw new McpError(ErrorCode.InvalidParams, 'cocktail_id is required for action: update');
+        }
+        const { action, cocktail_id, ...updateFields } = args;
+        const result = await this.barClient.updateCocktail(cocktail_id, updateFields);
+        return { content: [{ type: 'text', text: `Updated cocktail **${result.name}** (ID: ${result.id}).` }] };
+      }
+
+      case 'delete': {
+        if (!args.cocktail_id) {
+          throw new McpError(ErrorCode.InvalidParams, 'cocktail_id is required for action: delete');
+        }
+        await this.barClient.deleteCocktail(args.cocktail_id);
+        return { content: [{ type: 'text', text: `Deleted cocktail #${args.cocktail_id}.` }] };
+      }
+
+      default:
+        throw new McpError(ErrorCode.InvalidParams, `Unknown action: ${(args as any).action}`);
+    }
+  }
+
+  private async handleManageIngredientCatalog(args: {
+    action: 'search' | 'create' | 'update' | 'delete';
+    query?: string;
+    limit?: number;
+    ingredient_id?: number;
+    name?: string;
+    strength?: number;
+    description?: string;
+    origin?: string;
+    color?: string;
+    category?: string;
+  }) {
+    switch (args.action) {
+      case 'search': {
+        if (!args.query) {
+          throw new McpError(ErrorCode.InvalidParams, 'query is required for action: search');
+        }
+        const results = await this.barClient.searchIngredientsCatalog(args.query, args.limit || 20);
+        const items = results.data || [];
+        if (items.length === 0) {
+          return { content: [{ type: 'text', text: `No ingredients found matching "${args.query}".` }] };
+        }
+        const lines = items.map(item => {
+          const cat = item.category?.name ? ` [${item.category.name}]` : '';
+          const strength = item.strength ? ` — ${item.strength}% ABV` : '';
+          return `• **${item.name}**${strength}${cat}  *(id: ${item.id})*`;
+        });
+        return { content: [{ type: 'text', text: `# Ingredient Search: "${args.query}"\n\n${lines.join('\n')}` }] };
+      }
+
+      case 'create': {
+        if (!args.name) {
+          throw new McpError(ErrorCode.InvalidParams, 'name is required for action: create');
+        }
+        const result = await this.barClient.createIngredient(args as CreateIngredientParams);
+        return { content: [{ type: 'text', text: `Created ingredient **${result.name}** (id: ${result.id}).` }] };
+      }
+
+      case 'update': {
+        if (!args.ingredient_id) {
+          throw new McpError(ErrorCode.InvalidParams, 'ingredient_id is required for action: update');
+        }
+        const { action, ingredient_id, ...updateFields } = args;
+        const result = await this.barClient.updateIngredient(ingredient_id, updateFields);
+        return { content: [{ type: 'text', text: `Updated ingredient **${result.name}** (id: ${result.id}).` }] };
+      }
+
+      case 'delete': {
+        if (!args.ingredient_id) {
+          throw new McpError(ErrorCode.InvalidParams, 'ingredient_id is required for action: delete');
+        }
+        await this.barClient.deleteIngredient(args.ingredient_id);
+        return { content: [{ type: 'text', text: `Deleted ingredient #${args.ingredient_id} from the catalog.` }] };
+      }
+
+      default:
+        throw new McpError(ErrorCode.InvalidParams, `Unknown action: ${(args as any).action}`);
     }
   }
 

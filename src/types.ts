@@ -312,3 +312,82 @@ export interface CocktailCollection {
   created_at: string;
   updated_at: string;
 }
+
+// Write operation types
+
+export interface CocktailIngredientInput {
+  ingredient_id?: number;
+  ingredient_name?: string;
+  amount?: number;
+  amount_max?: number;
+  units?: string;
+  optional?: boolean;
+  sort?: number;
+  note?: string;
+  substitutes?: number[];
+}
+
+export interface InstructionInput {
+  sort: number;
+  content: string;
+}
+
+export interface CreateCocktailParams {
+  name: string;
+  description?: string;
+  instructions?: string[] | InstructionInput[];
+  garnish?: string;
+  source?: string;
+  abv?: number;
+  glass?: string;
+  glass_id?: number;
+  method?: string;
+  method_id?: number;
+  tags?: string[];
+  ingredients?: CocktailIngredientInput[];
+}
+
+export interface CreateIngredientParams {
+  name: string;
+  strength?: number;
+  description?: string;
+  origin?: string;
+  color?: string;
+  category?: string;
+  ingredient_category_id?: number;
+  parent_ingredient_id?: number;
+}
+
+export interface AddBarIngredientParams {
+  ingredient_id?: number;
+  ingredient_name?: string;
+  amount?: number;
+  units?: string;
+  price?: number;
+  note?: string;
+}
+
+export interface IngredientCatalogItem {
+  id: number;
+  name: string;
+  slug: string;
+  strength?: number;
+  description?: string;
+  origin?: string;
+  color?: string;
+  category?: IngredientCategory;
+  ingredient_category_id?: number;
+}
+
+export interface IngredientCatalogResult {
+  data: IngredientCatalogItem[];
+  links?: PaginationLinks;
+  meta?: PaginationMeta;
+}
+
+export interface BarShoppingListEntry {
+  id: number;
+  ingredient_id: number;
+  ingredient: IngredientCatalogItem;
+  created_at?: string;
+}

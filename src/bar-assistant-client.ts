@@ -11,7 +11,18 @@ import {
   InventoryCheckParams,
   BarIngredient,
   ApiError,
-  CocktailCollection
+  CocktailCollection,
+  CreateCocktailParams,
+  CreateIngredientParams,
+  AddBarIngredientParams,
+  CocktailIngredientInput,
+  InstructionInput,
+  IngredientCatalogItem,
+  IngredientCatalogResult,
+  BarShoppingListEntry,
+  IngredientCategory,
+  Glass,
+  CocktailMethod,
 } from './types.js';
 
 /**
@@ -464,6 +475,194 @@ export class BarAssistantClient {
     const modifiers = ['vermouth', 'campari', 'aperol', 'bitters', 'cointreau', 'triple sec', 
                       'chartreuse', 'benedictine', 'maraschino', 'creme', 'liqueur'];
     return modifiers.some(modifier => normalized.includes(modifier));
+  }
+
+  // ── Reference data ──────────────────────────────────────────────────────────
+
+  async getGlasses(): Promise<Glass[]> {
+    const response: AxiosResponse<{ data: Glass[] }> = await this.client.get('/api/glasses');
+    return response.data.data || [];
+  }
+
+  async getCocktailMethods(): Promise<CocktailMethod[]> {
+    const response: AxiosResponse<{ data: CocktailMethod[] }> = await this.client.get('/api/cocktail-methods');
+    return response.data.data || [];
+  }
+
+  async getIngredientCategories(): Promise<IngredientCategory[]> {
+    const response: AxiosResponse<{ data: IngredientCategory[] }> = await this.client.get('/api/ingredient-categories');
+    return response.data.data || [];
+  }
+
+  // ── Ingredient catalog ───────────────────────────────────────────────────────
+
+  async searchIngredientsCatalog(query: string, limit = 20): Promise<IngredientCatalogResult> {
+    const params = new URLSearchParams();
+    params.append('filter[name]', query);
+    params.append('per_page', limit.toString());
+    const response: AxiosResponse<IngredientCatalogResult> = await this.client.get(`/api/ingredients?${params.toString()}`);
+    return response.data;
+  }
+
+  async resolveIngredientId(name: string): Promise<number | null> {
+    const results = await this.searchIngredientsCatalog(name, 5);
+    if (!results.data || results.data.length === 0) return null;
+    const exact = results.data.find(i => i.name.toLowerCase() === name.toLowerCase());
+    return exact ? exact.id : results.data[0].id;
+  }
+
+  async createIngredient(params: CreateIngredientParams): Promise<IngredientCatalogItem> {
+    let categoryId = params.ingredient_category_id;
+    if (!categoryId && params.category) {
+      const categories = await this.getIngredientCategories();
+      const match = categories.find(c => c.name.toLowerCase() === params.category!.toLowerCase());
+      if (match) categoryId = match.id;
+    }
+    const response: AxiosResponse<{ data: IngredientCatalogItem }> = await this.client.post('/api/ingredients', {
+      name: params.name,
+      strength: params.strength,
+      description: params.description,
+      origin: params.origin,
+      color: params.color,
+      ingredient_category_id: categoryId,
+      parent_ingredient_id: params.parent_ingredient_id,
+    });
+    return response.data.data || (response.data as any);
+  }
+
+  async updateIngredient(id: number, params: Partial<CreateIngredientParams>): Promise<IngredientCatalogItem> {
+    let categoryId = params.ingredient_category_id;
+    if (!categoryId && params.category) {
+      const categories = await this.getIngredientCategories();
+      const match = categories.find(c => c.name.toLowerCase() === params.category!.toLowerCase());
+      if (match) categoryId = match.id;
+    }
+    const payload: Record<string, any> = { ...params };
+    if (categoryId) payload.ingredient_category_id = categoryId;
+    delete payload.category;
+    const response: AxiosResponse<{ data: IngredientCatalogItem }> = await this.client.patch(`/api/ingredients/${id}`, payload);
+    return response.data.data || (response.data as any);
+  }
+
+  async deleteIngredient(id: number): Promise<void> {
+    await this.client.delete(`/api/ingredients/${id}`);
+  }
+
+  // ── Bar inventory ────────────────────────────────────────────────────────────
+
+  async addBarIngredient(params: AddBarIngredientParams): Promise<BarIngredient> {
+    let ingredientId = params.ingredient_id;
+    if (!ingredientId && params.ingredient_name) {
+      const id = await this.resolveIngredientId(params.ingredient_name);
+      if (!id) throw new Error(`Ingredient not found in catalog: "${params.ingredient_name}". Use manage_ingredient_catalog to create it first.`);
+      ingredientId = id;
+    }
+    if (!ingredientId) throw new Error('ingredient_id or ingredient_name is required');
+    const barId = this.config.barId || '1';
+    const response: AxiosResponse<{ data: BarIngredient }> = await this.client.post(`/api/bars/${barId}/ingredients`, {
+      ingredient_id: ingredientId,
+      amount: params.amount,
+      units: params.units,
+      price: params.price,
+      note: params.note,
+    });
+    return response.data.data || (response.data as any);
+  }
+
+  async updateBarIngredient(barIngredientId: number, params: { amount?: number; units?: string; price?: number; note?: string }): Promise<BarIngredient> {
+    const response: AxiosResponse<{ data: BarIngredient }> = await this.client.patch(`/api/bar-ingredients/${barIngredientId}`, params);
+    return response.data.data || (response.data as any);
+  }
+
+  async removeBarIngredient(barIngredientId: number): Promise<void> {
+    await this.client.delete(`/api/bar-ingredients/${barIngredientId}`);
+  }
+
+  // ── Shopping list ────────────────────────────────────────────────────────────
+
+  async getShoppingList(): Promise<BarShoppingListEntry[]> {
+    const response: AxiosResponse<{ data: BarShoppingListEntry[] }> = await this.client.get('/api/shopping-list');
+    return response.data.data || [];
+  }
+
+  async addToShoppingList(ingredientIds: number[]): Promise<void> {
+    await this.client.post('/api/shopping-list/batch-store', { ingredient_ids: ingredientIds });
+  }
+
+  async removeFromShoppingList(ingredientIds: number[]): Promise<void> {
+    await this.client.post('/api/shopping-list/batch-delete', { ingredient_ids: ingredientIds });
+  }
+
+  // ── Cocktail write operations ─────────────────────────────────────────────────
+
+  async createCocktail(params: CreateCocktailParams): Promise<DetailedRecipe> {
+    const payload = await this.buildCocktailPayload(params);
+    const response: AxiosResponse<{ data: DetailedRecipe }> = await this.client.post('/api/cocktails', payload);
+    return response.data.data || (response.data as any);
+  }
+
+  async updateCocktail(id: number, params: Partial<CreateCocktailParams>): Promise<DetailedRecipe> {
+    const payload = await this.buildCocktailPayload(params);
+    const response: AxiosResponse<{ data: DetailedRecipe }> = await this.client.patch(`/api/cocktails/${id}`, payload);
+    return response.data.data || (response.data as any);
+  }
+
+  async deleteCocktail(id: number): Promise<void> {
+    await this.client.delete(`/api/cocktails/${id}`);
+  }
+
+  private async buildCocktailPayload(params: Partial<CreateCocktailParams>): Promise<object> {
+    let glassId = params.glass_id;
+    if (!glassId && params.glass) {
+      const glasses = await this.getGlasses();
+      const match = glasses.find(g => g.name.toLowerCase().includes(params.glass!.toLowerCase()));
+      if (match) glassId = match.id;
+    }
+
+    let methodId = params.method_id;
+    if (!methodId && params.method) {
+      const methods = await this.getCocktailMethods();
+      const match = methods.find(m => m.name.toLowerCase().includes(params.method!.toLowerCase()));
+      if (match) methodId = match.id;
+    }
+
+    const resolvedIngredients = await Promise.all(
+      (params.ingredients ?? []).map(async (ing: CocktailIngredientInput, index: number) => {
+        let ingredientId = ing.ingredient_id;
+        if (!ingredientId && ing.ingredient_name) {
+          const id = await this.resolveIngredientId(ing.ingredient_name);
+          if (!id) throw new Error(`Ingredient not found: "${ing.ingredient_name}". Use manage_ingredient_catalog to create it first.`);
+          ingredientId = id;
+        }
+        return {
+          ingredient_id: ingredientId,
+          amount: ing.amount,
+          amount_max: ing.amount_max,
+          units: ing.units,
+          optional: ing.optional ?? false,
+          sort: ing.sort ?? (index + 1),
+          note: ing.note,
+          substitutes: ing.substitutes ?? [],
+        };
+      })
+    );
+
+    const instructions: InstructionInput[] = (params.instructions ?? []).map((inst, index) =>
+      typeof inst === 'string' ? { sort: index + 1, content: inst } : inst as InstructionInput
+    );
+
+    return {
+      name: params.name,
+      description: params.description,
+      instructions,
+      garnish: params.garnish,
+      source: params.source,
+      abv: params.abv,
+      glass_id: glassId,
+      cocktail_method_id: methodId,
+      tags: params.tags ?? [],
+      ingredients: resolvedIngredients,
+    };
   }
 
   private getSimilarityReasons(cocktail1: DetailedRecipe, cocktail2: any): string[] {
