@@ -1123,17 +1123,17 @@ Returns detailed ingredient information including:
             description: `Manage what ingredients are stocked in your bar.
 
 **Actions:**
-- list: Show all ingredients currently in your bar inventory (with bar_ingredient_id needed for updates/removes)
+- list: Show all ingredients currently in your bar inventory (with ingredient_id needed for updates/removes)
 - add: Add an ingredient to your bar by name or ID, with optional amount/price/note
-- remove: Remove an ingredient from your bar by its bar_ingredient_id (use list to find IDs)
+- remove: Remove an ingredient from your bar by its ingredient_id (use list to find IDs)
 - update: Update the amount, units, price, or note of a stocked ingredient
 
 **Examples:**
 - List inventory: {action: "list"}
 - Add by name: {action: "add", ingredient_name: "Campari", amount: 700, units: "ml", price: 22.99}
 - Add by ID: {action: "add", ingredient_id: 42, amount: 750, units: "ml"}
-- Remove: {action: "remove", bar_ingredient_id: 15}
-- Update amount: {action: "update", bar_ingredient_id: 15, amount: 500, units: "ml"}`,
+- Remove: {action: "remove", ingredient_id: 15}
+- Update amount: {action: "update", ingredient_id: 15, amount: 500, units: "ml"}`,
             inputSchema: {
               type: 'object',
               properties: {
@@ -1148,11 +1148,7 @@ Returns detailed ingredient information including:
                 },
                 ingredient_id: {
                   type: 'number',
-                  description: 'Catalog ingredient ID to add (used with action: add)',
-                },
-                bar_ingredient_id: {
-                  type: 'number',
-                  description: 'Bar inventory entry ID (used with action: remove or update; get this from action: list)',
+                  description: 'Catalog ingredient ID (used with action: add, remove, or update; get this from action: list or manage_ingredient_catalog search)',
                 },
                 amount: {
                   type: 'number',
@@ -1411,10 +1407,12 @@ Use this to find ingredient IDs for other tools, or to add new custom ingredient
           throw error;
         }
         
-        throw new McpError(
-          ErrorCode.InternalError,
-          `Tool execution failed: ${error instanceof Error ? error.message : String(error)}`
-        );
+        const errMsg = error instanceof Error
+          ? error.message
+          : (typeof error === 'object' && error !== null && 'message' in error)
+            ? String((error as any).message)
+            : String(error);
+        throw new McpError(ErrorCode.InternalError, `Tool execution failed: ${errMsg}`);
       }
     });
   }
@@ -2295,7 +2293,6 @@ Use this to find ingredient IDs for other tools, or to add new custom ingredient
     action: 'list' | 'add' | 'remove' | 'update';
     ingredient_name?: string;
     ingredient_id?: number;
-    bar_ingredient_id?: number;
     amount?: number;
     units?: string;
     price?: number;
@@ -2304,17 +2301,18 @@ Use this to find ingredient IDs for other tools, or to add new custom ingredient
     switch (args.action) {
       case 'list': {
         const barId = this.barClient['config'].barId || '1';
-        const response = await this.barClient['client'].get(`/api/bars/${barId}/ingredients?include=ingredient`);
+        const response = await this.barClient['client'].get(`/api/bars/${barId}/ingredients`);
         const items: any[] = response.data.data || [];
         if (items.length === 0) {
           return { content: [{ type: 'text', text: '# Bar Inventory\n\nYour bar inventory is empty.' }] };
         }
         const lines = items.map(item => {
-          const name = item.ingredient?.name || `Ingredient #${item.ingredient_id}`;
+          // API returns flat Ingredient objects; name is at top level, id is the catalog ingredient ID
+          const name = item.name ?? item.ingredient?.name ?? `#${item.id}`;
           const amount = item.amount ? ` — ${this.formatVolume(item.amount, item.units || 'ml')}` : '';
           const price = item.price ? ` ($${item.price})` : '';
           const note = item.note ? ` [${item.note}]` : '';
-          return `• **${name}**${amount}${price}${note}  *(bar_ingredient_id: ${item.id})*`;
+          return `• **${name}**${amount}${price}${note}  *(ingredient_id: ${item.id})*`;
         });
         return { content: [{ type: 'text', text: `# Bar Inventory (${items.length} items)\n\n${lines.join('\n')}` }] };
       }
@@ -2323,7 +2321,7 @@ Use this to find ingredient IDs for other tools, or to add new custom ingredient
         if (!args.ingredient_id && !args.ingredient_name) {
           throw new McpError(ErrorCode.InvalidParams, 'ingredient_id or ingredient_name is required for action: add');
         }
-        const result = await this.barClient.addBarIngredient({
+        await this.barClient.addBarIngredient({
           ingredient_id: args.ingredient_id,
           ingredient_name: args.ingredient_name,
           amount: args.amount,
@@ -2331,30 +2329,20 @@ Use this to find ingredient IDs for other tools, or to add new custom ingredient
           price: args.price,
           note: args.note,
         });
-        const name = (result as any).ingredient?.name || args.ingredient_name || `Ingredient #${result.ingredient_id}`;
-        return { content: [{ type: 'text', text: `Added **${name}** to your bar inventory (bar_ingredient_id: ${result.id}).` }] };
+        const name = args.ingredient_name ?? `ingredient #${args.ingredient_id}`;
+        return { content: [{ type: 'text', text: `Added **${name}** to your bar inventory.` }] };
       }
 
       case 'remove': {
-        if (!args.bar_ingredient_id) {
-          throw new McpError(ErrorCode.InvalidParams, 'bar_ingredient_id is required for action: remove (use action: list to find it)');
+        if (!args.ingredient_id) {
+          throw new McpError(ErrorCode.InvalidParams, 'ingredient_id is required for action: remove (use action: list to find it)');
         }
-        await this.barClient.removeBarIngredient(args.bar_ingredient_id);
-        return { content: [{ type: 'text', text: `Removed bar ingredient #${args.bar_ingredient_id} from your inventory.` }] };
+        await this.barClient.removeBarIngredient(args.ingredient_id);
+        return { content: [{ type: 'text', text: `Removed ingredient #${args.ingredient_id} from your bar inventory.` }] };
       }
 
       case 'update': {
-        if (!args.bar_ingredient_id) {
-          throw new McpError(ErrorCode.InvalidParams, 'bar_ingredient_id is required for action: update (use action: list to find it)');
-        }
-        const result = await this.barClient.updateBarIngredient(args.bar_ingredient_id, {
-          amount: args.amount,
-          units: args.units,
-          price: args.price,
-          note: args.note,
-        });
-        const name = (result as any).ingredient?.name || `Ingredient #${result.ingredient_id}`;
-        return { content: [{ type: 'text', text: `Updated **${name}** (bar_ingredient_id: ${result.id}).` }] };
+        throw new McpError(ErrorCode.InvalidParams, 'Bar Assistant does not support updating individual inventory entries. Use action: remove then action: add to replace an ingredient.');
       }
 
       default:
@@ -2457,8 +2445,35 @@ Use this to find ingredient IDs for other tools, or to add new custom ingredient
         if (!args.cocktail_id) {
           throw new McpError(ErrorCode.InvalidParams, 'cocktail_id is required for action: update');
         }
+        // PUT is a full replacement — fetch current recipe and merge so unspecified fields are preserved
+        const current = await this.barClient.getCocktailRecipe(args.cocktail_id);
         const { action, cocktail_id, ...updateFields } = args;
-        const result = await this.barClient.updateCocktail(cocktail_id, updateFields);
+        const merged: CreateCocktailParams = {
+          name: updateFields.name ?? current.name,
+          description: updateFields.description ?? current.description,
+          garnish: updateFields.garnish ?? current.garnish,
+          source: updateFields.source ?? current.source,
+          abv: updateFields.abv ?? current.abv,
+          glass_id: updateFields.glass !== undefined ? undefined : current.glass?.id,
+          glass: updateFields.glass,
+          method_id: updateFields.method !== undefined ? undefined : current.method?.id,
+          method: updateFields.method,
+          tags: updateFields.tags ?? current.tags?.map((t: any) => t.name),
+          instructions: updateFields.instructions ?? (
+            typeof (current as any).instructions === 'string'
+              ? [(current as any).instructions]
+              : (current.instructions ?? []).map((i: any) => i.content ?? i.instruction ?? i)
+          ),
+          ingredients: updateFields.ingredients ?? current.ingredients?.map((i: any) => ({
+            ingredient_id: i.pivot?.ingredient_id ?? i.ingredient_id ?? i.ingredient?.id ?? i.id,
+            amount: i.pivot?.amount ?? i.amount,
+            units: i.pivot?.units ?? i.units,
+            optional: i.pivot?.optional ?? i.optional ?? false,
+            sort: i.pivot?.sort ?? i.sort,
+            note: i.pivot?.note ?? i.note,
+          })),
+        };
+        const result = await this.barClient.updateCocktail(cocktail_id, merged);
         return { content: [{ type: 'text', text: `Updated cocktail **${result.name}** (ID: ${result.id}).` }] };
       }
 
@@ -2498,7 +2513,7 @@ Use this to find ingredient IDs for other tools, or to add new custom ingredient
           return { content: [{ type: 'text', text: `No ingredients found matching "${args.query}".` }] };
         }
         const lines = items.map(item => {
-          const cat = item.category?.name ? ` [${item.category.name}]` : '';
+          const cat = (item as any).category?.name ? ` [${(item as any).category.name}]` : '';
           const strength = item.strength ? ` — ${item.strength}% ABV` : '';
           return `• **${item.name}**${strength}${cat}  *(id: ${item.id})*`;
         });

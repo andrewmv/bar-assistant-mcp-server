@@ -46,14 +46,7 @@ export class BarAssistantClient {
       },
     });
 
-    // Add request/response interceptors for logging and error handling
-    this.client.interceptors.request.use(
-      (config) => {
-        return config;
-      },
-      (error) => Promise.reject(error)
-    );
-
+    // Add response interceptor for error handling
     this.client.interceptors.response.use(
       (response) => response,
       (error) => {
@@ -490,8 +483,17 @@ export class BarAssistantClient {
   }
 
   async getIngredientCategories(): Promise<IngredientCategory[]> {
-    const response: AxiosResponse<{ data: IngredientCategory[] }> = await this.client.get('/api/ingredient-categories');
-    return response.data.data || [];
+    // Ingredient categories were removed in Bar Assistant v5 — return empty array
+    return [];
+  }
+
+  private cachedUserId: number | null = null;
+
+  async getUserId(): Promise<number> {
+    if (this.cachedUserId) return this.cachedUserId;
+    const response: AxiosResponse<{ data: { id: number } }> = await this.client.get('/api/profile');
+    this.cachedUserId = response.data.data.id;
+    return this.cachedUserId;
   }
 
   // ── Ingredient catalog ───────────────────────────────────────────────────────
@@ -512,35 +514,38 @@ export class BarAssistantClient {
   }
 
   async createIngredient(params: CreateIngredientParams): Promise<IngredientCatalogItem> {
-    let categoryId = params.ingredient_category_id;
-    if (!categoryId && params.category) {
-      const categories = await this.getIngredientCategories();
-      const match = categories.find(c => c.name.toLowerCase() === params.category!.toLowerCase());
-      if (match) categoryId = match.id;
-    }
     const response: AxiosResponse<{ data: IngredientCatalogItem }> = await this.client.post('/api/ingredients', {
       name: params.name,
-      strength: params.strength,
+      strength: params.strength ?? 0,
       description: params.description,
       origin: params.origin,
       color: params.color,
-      ingredient_category_id: categoryId,
-      parent_ingredient_id: params.parent_ingredient_id,
+      parent_ingredient_id: params.parent_ingredient_id ?? null,
+      images: [],
+      complex_ingredient_part_ids: [],
+      prices: [],
     });
     return response.data.data || (response.data as any);
   }
 
   async updateIngredient(id: number, params: Partial<CreateIngredientParams>): Promise<IngredientCatalogItem> {
-    let categoryId = params.ingredient_category_id;
-    if (!categoryId && params.category) {
-      const categories = await this.getIngredientCategories();
-      const match = categories.find(c => c.name.toLowerCase() === params.category!.toLowerCase());
-      if (match) categoryId = match.id;
-    }
-    const payload: Record<string, any> = { ...params };
-    if (categoryId) payload.ingredient_category_id = categoryId;
+    const current: AxiosResponse<{ data: IngredientCatalogItem }> = await this.client.get(`/api/ingredients/${id}`);
+    const existing = current.data.data;
+    const payload: Record<string, any> = {
+      name: existing.name,
+      strength: existing.strength ?? 0,
+      description: existing.description,
+      origin: existing.origin,
+      color: existing.color,
+      parent_ingredient_id: existing.parent_ingredient_id ?? null,
+      images: [],
+      complex_ingredient_part_ids: [],
+      prices: [],
+      ...params,
+    };
     delete payload.category;
-    const response: AxiosResponse<{ data: IngredientCatalogItem }> = await this.client.patch(`/api/ingredients/${id}`, payload);
+    delete payload.ingredient_category_id;
+    const response: AxiosResponse<{ data: IngredientCatalogItem }> = await this.client.put(`/api/ingredients/${id}`, payload);
     return response.data.data || (response.data as any);
   }
 
@@ -550,7 +555,7 @@ export class BarAssistantClient {
 
   // ── Bar inventory ────────────────────────────────────────────────────────────
 
-  async addBarIngredient(params: AddBarIngredientParams): Promise<BarIngredient> {
+  async addBarIngredient(params: AddBarIngredientParams): Promise<{ ingredient_id: number }> {
     let ingredientId = params.ingredient_id;
     if (!ingredientId && params.ingredient_name) {
       const id = await this.resolveIngredientId(params.ingredient_name);
@@ -559,38 +564,35 @@ export class BarAssistantClient {
     }
     if (!ingredientId) throw new Error('ingredient_id or ingredient_name is required');
     const barId = this.config.barId || '1';
-    const response: AxiosResponse<{ data: BarIngredient }> = await this.client.post(`/api/bars/${barId}/ingredients`, {
-      ingredient_id: ingredientId,
-      amount: params.amount,
-      units: params.units,
-      price: params.price,
-      note: params.note,
-    });
-    return response.data.data || (response.data as any);
+    await this.client.post(`/api/bars/${barId}/ingredients/batch-store`, { ingredients: [ingredientId] });
+    return { ingredient_id: ingredientId };
   }
 
-  async updateBarIngredient(barIngredientId: number, params: { amount?: number; units?: string; price?: number; note?: string }): Promise<BarIngredient> {
-    const response: AxiosResponse<{ data: BarIngredient }> = await this.client.patch(`/api/bar-ingredients/${barIngredientId}`, params);
-    return response.data.data || (response.data as any);
-  }
-
-  async removeBarIngredient(barIngredientId: number): Promise<void> {
-    await this.client.delete(`/api/bar-ingredients/${barIngredientId}`);
+  async removeBarIngredient(ingredientId: number): Promise<void> {
+    const barId = this.config.barId || '1';
+    await this.client.post(`/api/bars/${barId}/ingredients/batch-delete`, { ingredients: [ingredientId] });
   }
 
   // ── Shopping list ────────────────────────────────────────────────────────────
 
   async getShoppingList(): Promise<BarShoppingListEntry[]> {
-    const response: AxiosResponse<{ data: BarShoppingListEntry[] }> = await this.client.get('/api/shopping-list');
+    const userId = await this.getUserId();
+    const response: AxiosResponse<{ data: BarShoppingListEntry[] }> = await this.client.get(`/api/users/${userId}/shopping-list`);
     return response.data.data || [];
   }
 
   async addToShoppingList(ingredientIds: number[]): Promise<void> {
-    await this.client.post('/api/shopping-list/batch-store', { ingredient_ids: ingredientIds });
+    const userId = await this.getUserId();
+    await this.client.post(`/api/users/${userId}/shopping-list/batch-store`, {
+      ingredients: ingredientIds.map(id => ({ id, quantity: 1 })),
+    });
   }
 
   async removeFromShoppingList(ingredientIds: number[]): Promise<void> {
-    await this.client.post('/api/shopping-list/batch-delete', { ingredient_ids: ingredientIds });
+    const userId = await this.getUserId();
+    await this.client.post(`/api/users/${userId}/shopping-list/batch-delete`, {
+      ingredients: ingredientIds.map(id => ({ id })),
+    });
   }
 
   // ── Cocktail write operations ─────────────────────────────────────────────────
@@ -603,7 +605,7 @@ export class BarAssistantClient {
 
   async updateCocktail(id: number, params: Partial<CreateCocktailParams>): Promise<DetailedRecipe> {
     const payload = await this.buildCocktailPayload(params);
-    const response: AxiosResponse<{ data: DetailedRecipe }> = await this.client.patch(`/api/cocktails/${id}`, payload);
+    const response: AxiosResponse<{ data: DetailedRecipe }> = await this.client.put(`/api/cocktails/${id}`, payload);
     return response.data.data || (response.data as any);
   }
 
@@ -629,9 +631,10 @@ export class BarAssistantClient {
     const resolvedIngredients = await Promise.all(
       (params.ingredients ?? []).map(async (ing: CocktailIngredientInput, index: number) => {
         let ingredientId = ing.ingredient_id;
-        if (!ingredientId && ing.ingredient_name) {
-          const id = await this.resolveIngredientId(ing.ingredient_name);
-          if (!id) throw new Error(`Ingredient not found: "${ing.ingredient_name}". Use manage_ingredient_catalog to create it first.`);
+        const lookupName = ing.ingredient_name ?? (ing as any).name;
+        if (!ingredientId && lookupName) {
+          const id = await this.resolveIngredientId(lookupName);
+          if (!id) throw new Error(`Ingredient not found: "${lookupName}". Use manage_ingredient_catalog to find or create it first.`);
           ingredientId = id;
         }
         return {
@@ -647,9 +650,9 @@ export class BarAssistantClient {
       })
     );
 
-    const instructions: InstructionInput[] = (params.instructions ?? []).map((inst, index) =>
-      typeof inst === 'string' ? { sort: index + 1, content: inst } : inst as InstructionInput
-    );
+    const instructions: string = (params.instructions ?? []).map(inst =>
+      typeof inst === 'string' ? inst : (inst as InstructionInput).content
+    ).join('\n');
 
     return {
       name: params.name,

@@ -375,8 +375,7 @@ export interface IngredientCatalogItem {
   description?: string;
   origin?: string;
   color?: string;
-  category?: IngredientCategory;
-  ingredient_category_id?: number;
+  parent_ingredient_id?: number | null;
 }
 
 export interface IngredientCatalogResult {

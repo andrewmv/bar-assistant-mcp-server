@@ -1,6 +1,7 @@
 services:
   bar-assistant-mcp-server:
-    image: bar-assistant-mcp-server:latest
+    #image: bar-assistant-mcp-server:latest
+    build: .
     container_name: bar-assistant-mcp-server
     command: npm start -- --sse
     restart: unless-stopped
@@ -8,6 +9,8 @@ services:
       - "3001:3001"
     env_file:
       - ./.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # Optionally, you can add a healthcheck
     # healthcheck:
     #   test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
