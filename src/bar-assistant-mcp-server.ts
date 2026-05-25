@@ -46,19 +46,6 @@ class BarAssistantMCPServer {
   private cacheManager: CacheManager;
 
   constructor() {
-    // Initialize MCP server
-    this.server = new Server(
-      {
-        name: 'bar-assistant-mcp-server',
-        version: '1.0.0',
-      },
-      {
-        capabilities: {
-          tools: {},
-        },
-      }
-    );
-
     // Validate required environment variables
     this.validateEnvironment();
 
@@ -79,7 +66,24 @@ class BarAssistantMCPServer {
       maxSize: 1000 // 1000 entries
     });
 
-    this.setupToolHandlers();
+    // Create a server instance for stdio use; SSE creates one per connection
+    this.server = this.createServer();
+  }
+
+  private createServer(): Server {
+    const server = new Server(
+      {
+        name: 'bar-assistant-mcp-server',
+        version: '1.0.0',
+      },
+      {
+        capabilities: {
+          tools: {},
+        },
+      }
+    );
+    this.setupToolHandlers(server);
+    return server;
   }
 
   /**
@@ -864,9 +868,9 @@ class BarAssistantMCPServer {
     return this.createStructuredResponse(humanText, structuredData);
   }
 
-  private setupToolHandlers(): void {
+  private setupToolHandlers(server: Server): void {
     // List available tools
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => {
+    server.setRequestHandler(ListToolsRequestSchema, async () => {
       return {
         tools: [
           {
@@ -1368,7 +1372,7 @@ Use this to find ingredient IDs for other tools, or to add new custom ingredient
     });
 
     // Handle tool calls
-    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { name, arguments: args } = request.params;
 
       try {
@@ -2290,7 +2294,7 @@ Use this to find ingredient IDs for other tools, or to add new custom ingredient
   }
 
   private async handleManageBarInventory(args: {
-    action: 'list' | 'add' | 'remove' | 'update';
+    action: 'list' | 'get' | 'add' | 'remove' | 'update';
     ingredient_name?: string;
     ingredient_id?: number;
     amount?: number;
@@ -2299,7 +2303,8 @@ Use this to find ingredient IDs for other tools, or to add new custom ingredient
     note?: string;
   }) {
     switch (args.action) {
-      case 'list': {
+      case 'list':
+      case 'get': {
         const barId = this.barClient['config'].barId || '1';
         const response = await this.barClient['client'].get(`/api/bars/${barId}/ingredients`);
         const items: any[] = response.data.data || [];
@@ -2605,22 +2610,26 @@ Use this to find ingredient IDs for other tools, or to add new custom ingredient
 
     app.use(authMiddleware);
 
-    // Keep track of the current transport
-    let transport: SSEServerTransport | null = null;
+    const transports = new Map<string, SSEServerTransport>();
 
     app.get('/sse', async (req, res) => {
-      console.log('New SSE connection');
-      transport = new SSEServerTransport('/message', res);
-      await this.server.connect(transport);
-      
-      // Clean up when connection closes
+      const transport = new SSEServerTransport('/message', res);
+      const sessionId = transport.sessionId;
+      transports.set(sessionId, transport);
+      console.log(`New SSE connection: ${sessionId} (${transports.size} active)`);
+
       req.on('close', () => {
-        console.log('SSE connection closed');
-        // Optionally cleanup
+        transports.delete(sessionId);
+        console.log(`SSE connection closed: ${sessionId} (${transports.size} active)`);
       });
+
+      const server = this.createServer();
+      await server.connect(transport);
     });
 
     app.post('/message', async (req, res) => {
+      const sessionId = req.query.sessionId as string;
+      const transport = sessionId ? transports.get(sessionId) : undefined;
       if (!transport) {
         res.sendStatus(400);
         return;
