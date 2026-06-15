@@ -2567,7 +2567,17 @@ Use this to find ingredient IDs for other tools, or to add new custom ingredient
     // Security middleware
     app.use(helmet());
     app.use(morgan('combined'));
-    
+
+    // Health check endpoint - placed before rate limiting and auth so
+    // infrastructure (load balancers, Docker/Kubernetes probes) can poll it freely
+    app.get('/health', (req: Request, res: Response) => {
+      res.json({
+        status: 'ok',
+        uptime: process.uptime(),
+        timestamp: new Date().toISOString(),
+      });
+    });
+
     // Rate limiting: 100 requests per 15 minutes
     const limiter = rateLimit({
       windowMs: 15 * 60 * 1000,
@@ -2635,10 +2645,6 @@ Use this to find ingredient IDs for other tools, or to add new custom ingredient
         return;
       }
       await transport.handlePostMessage(req, res);
-    });
-
-    app.get('/debug', (req: Request, res: Response) => {
-      res.json(process.env);
     });
 
     app.listen(port, () => {

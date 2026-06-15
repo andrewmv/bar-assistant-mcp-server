@@ -17,6 +17,9 @@ RUN npm run build
 # Stage 2: Create the final image
 FROM node:18-alpine
 
+# curl is required for the Docker healthcheck against /health
+RUN apk add --no-cache curl
+
 WORKDIR /usr/src/app
 
 # Copy the built app from the builder stage
